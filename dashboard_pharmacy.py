@@ -397,7 +397,7 @@ else:
                 "Delivery Fee (₦)",
                 min_value=0,
                 max_value=2000,
-                value=pharmacy_data.get('delivery_fee', 500),
+                value=int(pharmacy_data.get('delivery_fee', 500)),
                 step=100
             )
             
