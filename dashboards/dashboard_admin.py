@@ -1396,7 +1396,7 @@ elif page == "💰 Payments":
             df_consultations = pd.DataFrame(consultations)
             
             if 'created_at' in df_consultations.columns and 'platform_revenue' in df_consultations.columns:
-                df_consultations['date'] = pd.to_datetime(df_consultations['created_at']).dt.date
+                df_consultations['date'] = pd.to_datetime(df_consultations['created_at'], errors='coerce').dt.date
                 daily_revenue = df_consultations.groupby('date')['platform_revenue'].sum().reset_index()
                 
                 fig = px.line(daily_revenue, x='date', y='platform_revenue',
