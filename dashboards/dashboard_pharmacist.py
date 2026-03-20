@@ -399,7 +399,7 @@ else:
         else:
             for session in sessions:
                 with st.expander(
-                    f"💊 Patient #{session['id'][:8]} - {session['symptoms'][:50]}... ({session['status']})"
+                    f"💊 Patient #{str(session['id'])[:8]} - {session['symptoms'][:50]}... ({session['status']})"
                 ):
                     col1, col2 = st.columns(2)
                     
