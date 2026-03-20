@@ -1,8 +1,9 @@
 """
-OgaDoctor - Doctor Portal (WITH VIDEO CALLS)
-============================================
+OgaDoctor - Doctor Portal (WITH VIDEO CALLS - FIXED)
+====================================================
 Doctors log in to see their consultations, earnings, ratings
 + Start anonymous video calls with patients
++ Handles empty data gracefully
 """
 
 import streamlit as st
@@ -108,11 +109,15 @@ else:
     doctor_name = st.session_state.doctor_name
     
     # Get fresh doctor data
-    doctor = supabase.table('doctors')\
-        .select('*')\
-        .eq('id', doctor_id)\
-        .single()\
-        .execute().data
+    try:
+        doctor = supabase.table('doctors')\
+            .select('*')\
+            .eq('id', doctor_id)\
+            .single()\
+            .execute().data
+    except Exception as e:
+        st.error(f"Error loading doctor data: {str(e)}")
+        doctor = {}
     
     # ========================================================================
     # SIDEBAR
@@ -126,10 +131,13 @@ else:
     )
     
     if is_online != doctor.get('is_online'):
-        supabase.table('doctors').update({
-            'is_online': is_online
-        }).eq('id', doctor_id).execute()
-        st.sidebar.success("Status updated!")
+        try:
+            supabase.table('doctors').update({
+                'is_online': is_online
+            }).eq('id', doctor_id).execute()
+            st.sidebar.success("Status updated!")
+        except Exception as e:
+            st.sidebar.error(f"Update failed: {str(e)}")
     
     st.sidebar.markdown("---")
     
@@ -208,11 +216,15 @@ else:
         from datetime import datetime
         today = datetime.now().date()
         
-        today_consultations = supabase.table('Consultations')\
-            .select('*')\
-            .eq('doctor_id', doctor_id)\
-            .gte('created_at', today.isoformat())\
-            .execute().data
+        try:
+            today_consultations = supabase.table('Consultations')\
+                .select('*')\
+                .eq('doctor_id', doctor_id)\
+                .gte('created_at', today.isoformat())\
+                .execute().data
+        except Exception as e:
+            st.error(f"Error loading consultations: {str(e)}")
+            today_consultations = []
         
         col1, col2 = st.columns(2)
         
@@ -233,15 +245,19 @@ else:
             "All", "Assigned", "In Progress", "Completed"
         ])
         
-        query = supabase.table('Consultations')\
-            .select('*')\
-            .eq('doctor_id', doctor_id)\
-            .order('created_at', desc=True)
-        
-        if filter_status != "All":
-            query = query.eq('status', filter_status.lower().replace(' ', '_'))
-        
-        consultations = query.execute().data
+        try:
+            query = supabase.table('Consultations')\
+                .select('*')\
+                .eq('doctor_id', doctor_id)\
+                .order('created_at', desc=True)
+            
+            if filter_status != "All":
+                query = query.eq('status', filter_status.lower().replace(' ', '_'))
+            
+            consultations = query.execute().data
+        except Exception as e:
+            st.error(f"Error loading consultations: {str(e)}")
+            consultations = []
         
         st.write(f"**{len(consultations)} consultation(s)**")
         
@@ -333,25 +349,31 @@ else:
                     
                     with col1:
                         if st.button("💾 Save", key=f"save_{consult['id']}"):
-                            supabase.table('Consultations').update({
-                                'pharmacist_diagnosis': diagnosis,
-                                'pharmacist_prescription': prescription,
-                                'status': 'in_progress'
-                            }).eq('id', consult['id']).execute()
-                            st.success("Saved!")
-                            st.rerun()
+                            try:
+                                supabase.table('Consultations').update({
+                                    'pharmacist_diagnosis': diagnosis,
+                                    'pharmacist_prescription': prescription,
+                                    'status': 'in_progress'
+                                }).eq('id', consult['id']).execute()
+                                st.success("Saved!")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Save failed: {str(e)}")
                     
                     with col2:
                         if st.button("✅ Complete", key=f"done_{consult['id']}"):
-                            from datetime import datetime
-                            supabase.table('Consultations').update({
-                                'pharmacist_diagnosis': diagnosis,
-                                'pharmacist_prescription': prescription,
-                                'status': 'completed',
-                                'completed_at': datetime.now().isoformat()
-                            }).eq('id', consult['id']).execute()
-                            st.success("Completed!")
-                            st.rerun()
+                            try:
+                                from datetime import datetime
+                                supabase.table('Consultations').update({
+                                    'pharmacist_diagnosis': diagnosis,
+                                    'pharmacist_prescription': prescription,
+                                    'status': 'completed',
+                                    'completed_at': datetime.now().isoformat()
+                                }).eq('id', consult['id']).execute()
+                                st.success("Completed!")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Complete failed: {str(e)}")
     
     # ========================================================================
     # PAGE 3: MY REVIEWS
@@ -359,11 +381,15 @@ else:
     elif page == "⭐ My Reviews":
         st.title("⭐ My Reviews")
         
-        reviews = supabase.table('reviews')\
-            .select('*')\
-            .eq('doctor_id', doctor_id)\
-            .order('created_at', desc=True)\
-            .execute().data
+        try:
+            reviews = supabase.table('reviews')\
+                .select('*')\
+                .eq('doctor_id', doctor_id)\
+                .order('created_at', desc=True)\
+                .execute().data
+        except Exception as e:
+            st.error(f"Error loading reviews: {str(e)}")
+            reviews = []
         
         if not reviews:
             st.info("No reviews yet!")
@@ -399,14 +425,19 @@ else:
             st.metric("Total Earnings", f"₦{doctor.get('total_earnings', 0):,.0f}")
         
         with col2:
-            pending = supabase.table('Consultations')\
-                .select('doctor_payout')\
-                .eq('doctor_id', doctor_id)\
-                .eq('status', 'completed')\
-                .eq('payout_status', 'pending')\
-                .execute().data
+            try:
+                pending = supabase.table('Consultations')\
+                    .select('doctor_payout')\
+                    .eq('doctor_id', doctor_id)\
+                    .eq('status', 'completed')\
+                    .eq('payout_status', 'pending')\
+                    .execute().data
+                
+                pending_amount = sum(p.get('doctor_payout', 705) for p in pending)
+            except Exception as e:
+                st.error(f"Error loading pending payouts: {str(e)}")
+                pending_amount = 0
             
-            pending_amount = sum(p.get('doctor_payout', 705) for p in pending)
             st.metric("Pending Payout", f"₦{pending_amount:,.0f}")
         
         with col3:
@@ -415,13 +446,17 @@ else:
         st.markdown("---")
         st.subheader("Earnings History")
         
-        consultations = supabase.table('Consultations')\
-            .select('*')\
-            .eq('doctor_id', doctor_id)\
-            .eq('status', 'completed')\
-            .order('completed_at', desc=True)\
-            .limit(20)\
-            .execute().data
+        try:
+            consultations = supabase.table('Consultations')\
+                .select('*')\
+                .eq('doctor_id', doctor_id)\
+                .eq('status', 'completed')\
+                .order('completed_at', desc=True)\
+                .limit(20)\
+                .execute().data
+        except Exception as e:
+            st.error(f"Error loading earnings history: {str(e)}")
+            consultations = []
         
         if consultations:
             df = pd.DataFrame(consultations)
@@ -437,6 +472,8 @@ else:
                     df[['completed_at', 'patient_name', 'doctor_payout']],
                     use_container_width=True
                 )
+        else:
+            st.info("No completed consultations yet.")
     
     # ========================================================================
     # PAGE 5: SETTINGS
@@ -478,15 +515,18 @@ else:
             ])
             
             if st.form_submit_button("💾 Update"):
-                supabase.table('doctors').update({
-                    'bank_details': {
-                        'account_name': account_name,
-                        'account_number': account_number,
-                        'bank_name': bank_name
-                    }
-                }).eq('id', doctor_id).execute()
-                st.success("Bank details updated!")
-                st.rerun()
+                try:
+                    supabase.table('doctors').update({
+                        'bank_details': {
+                            'account_name': account_name,
+                            'account_number': account_number,
+                            'bank_name': bank_name
+                        }
+                    }).eq('id', doctor_id).execute()
+                    st.success("Bank details updated!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Update failed: {str(e)}")
 
 # Footer
 st.markdown("---")
