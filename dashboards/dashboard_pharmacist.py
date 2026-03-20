@@ -427,7 +427,7 @@ else:
                         
                         st.markdown("#### 💰 Payment")
                         st.write(f"**Session Fee:** ₦{session.get('consultation_fee', 1000):,.0f}")
-                        st.write(f"**Your Payout:** ₦{session.get('pharmacist_payout', 400):,.0f}")
+                        st.write(f"**Your Payout:** ₦{session.get('provider_payout', 670):,.0f}")
                         
                         if session.get('patient_rating'):
                             st.write(f"**Patient Rating:** {'⭐' * session['patient_rating']}")
@@ -579,26 +579,26 @@ else:
         with col2:
             # Calculate pending payout
             completed_unpaid = supabase.table('Consultations')\
-                .select('pharmacist_payout')\
+                .select('provider_payout')\
                 .eq('pharmacist_id', pharmacist_id)\
                 .eq('status', 'completed')\
                 .eq('payout_status', 'pending')\
                 .execute().data
             
-            pending_amount = sum(c.get('pharmacist_payout', 400) for c in completed_unpaid)
+            pending_amount = sum(c.get('provider_payout', 670) for c in completed_unpaid)
             st.metric("Pending Payout", f"₦{pending_amount:,.0f}")
         
         with col3:
             # This month's earnings
             month_ago = (datetime.now() - timedelta(days=30)).date()
             month_sessions = supabase.table('Consultations')\
-                .select('pharmacist_payout')\
+                .select('provider_payout')\
                 .eq('pharmacist_id', pharmacist_id)\
                 .eq('status', 'completed')\
                 .gte('completed_at', month_ago.isoformat())\
                 .execute().data
             
-            month_earnings = sum(c.get('pharmacist_payout', 400) for c in month_sessions)
+            month_earnings = sum(c.get('provider_payout', 670) for c in month_sessions)
             st.metric("This Month", f"₦{month_earnings:,.0f}")
         
         st.markdown("---")
@@ -618,7 +618,7 @@ else:
             df = pd.DataFrame(earnings_data)
             df['completed_at'] = pd.to_datetime(df['completed_at'])
             df['date'] = df['completed_at'].dt.date
-            df['payout'] = df['pharmacist_payout'].fillna(400)
+            df['payout'] = df['provider_payout'].fillna(670)
             
             daily_earnings = df.groupby('date')['payout'].sum().reset_index()
             
@@ -650,7 +650,7 @@ else:
         if all_completed:
             df_transactions = pd.DataFrame(all_completed)
             df_transactions['completed_at'] = pd.to_datetime(df_transactions['completed_at'])
-            df_transactions['payout'] = df_transactions['pharmacist_payout'].fillna(400)
+            df_transactions['payout'] = df_transactions['provider_payout'].fillna(670)
             
             display_df = df_transactions[[
                 'completed_at', 'patient_name', 'payout', 'payout_status'
