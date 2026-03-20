@@ -104,6 +104,8 @@ def botpress_webhook():
         "severity": "Strong",
         "duration": "2 days",
         "consultation_type": "doctor",
+        ai_diagnosis = data.get('ai_diagnosis', '')
+        ai_drug_recommendations = data.get('ai_drug_recommendations', '')
         "payment_reference": "PAY_xxx" (optional)
     }
     """
@@ -118,6 +120,8 @@ def botpress_webhook():
         severity = data.get('severity', 'moderate')
         duration = data.get('duration', 'Not specified')
         consultation_type = data.get('consultation_type', 'doctor')
+        ai_diagnosis = data.get('ai_diagnosis', '')
+        ai_drug_recommendations = data.get('ai_drug_recommendations', '')
         payment_reference = data.get('payment_reference', '')
         
         # Validate
@@ -172,6 +176,8 @@ def botpress_webhook():
             'payment_status': 'paid' if payment_reference else 'unpaid',
             'payment_reference': payment_reference,
             'consultation_fee': consultation_fee,
+            'ai_diagnosis': ai_diagnosis,
+            'ai_drug_recommendations': ai_drug_recommendations,
             'platform_commission': platform_commission,
             'created_at': datetime.now().isoformat()
         }
