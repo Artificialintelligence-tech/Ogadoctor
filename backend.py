@@ -56,6 +56,23 @@ def assign_to_available_doctor():
         print(f"❌ Error finding doctor: {e}")
         return None, None
 
+def assign_to_available_pharmacist():
+    """Find an available pharmacist and return their ID and phone"""
+    try:
+        pharmacists = supabase.table('pharmacists')\
+            .select('*')\
+            .eq('is_online', True)\
+            .eq('status', 'active')\
+            .execute().data
+        
+        if pharmacists and len(pharmacists) > 0:
+            return pharmacists[0]['id'], pharmacists[0]['phone_number']
+        else:
+            return None, None
+    except Exception as e:
+        print(f"❌ Error finding pharmacist: {e}")
+        return None, None
+
 def determine_priority(severity):
     """Determine consultation priority based on severity"""
     severity_lower = str(severity).lower()
@@ -87,7 +104,7 @@ def home():
             'Encrypted video consultations',
             'Botpress integration',
             'Paystack payments',
-            'Doctor assignment'
+            'Doctor and Pharmacist assignment'
         ]
     })
 
@@ -104,8 +121,8 @@ def botpress_webhook():
         "severity": "Strong",
         "duration": "2 days",
         "consultation_type": "doctor",
-        ai_diagnosis = data.get('ai_diagnosis', '')
-        ai_drug_recommendations = data.get('ai_drug_recommendations', '')
+        "ai_diagnosis": "...",
+        "ai_drug_recommendations": "...",
         "payment_reference": "PAY_xxx" (optional)
     }
     """
@@ -134,7 +151,7 @@ def botpress_webhook():
         # Determine priority
         priority = determine_priority(severity)
         
-        # Determine fees (₦1,500 launch pricing!)
+        # Determine fees
         if consultation_type == 'pharmacist':
             consultation_fee = 1000
             provider_payout = 670  # 67%
@@ -179,36 +196,46 @@ def botpress_webhook():
             'ai_diagnosis': ai_diagnosis,
             'ai_drug_recommendations': ai_drug_recommendations,
             'platform_commission': platform_commission,
+            'provider_payout': provider_payout,
             'created_at': datetime.now().isoformat()
         }
-        
-        # Add provider-specific fields
-        if consultation_type == 'pharmacist':
-            consultation_data['pharmacist_payout'] = provider_payout
-        else:
-            consultation_data['doctor_payout'] = provider_payout
         
         # Save to database
         result = supabase.table('Consultations').insert(consultation_data).execute()
         consultation_id = result.data[0]['id']
         print(f"✅ Created consultation: {consultation_id}")
         
-        # If already paid, assign to doctor
-        if payment_reference and consultation_type == 'doctor':
-            provider_id, provider_phone = assign_to_available_doctor()
-            if provider_id:
-                supabase.table('Consultations').update({
-                    'doctor_id': provider_id,
-                    'status': 'assigned',
-                    'assigned_at': datetime.now().isoformat()
-                }).eq('id', consultation_id).execute()
-                print(f"✅ Assigned to doctor: {provider_id}")
-                
-                # Send notification
-                send_whatsapp_notification(
-                    provider_phone,
-                    f"🩺 New consultation assigned!\n\nPatient: {patient_name}\nSymptoms: {symptoms}\n\nLogin to start video call!"
-                )
+        # If already paid, assign to provider
+        if payment_reference:
+            if consultation_type == 'doctor':
+                provider_id, provider_phone = assign_to_available_doctor()
+                if provider_id:
+                    supabase.table('Consultations').update({
+                        'doctor_id': provider_id,
+                        'status': 'assigned',
+                        'assigned_at': datetime.now().isoformat()
+                    }).eq('id', consultation_id).execute()
+                    print(f"✅ Assigned to doctor: {provider_id}")
+                    
+                    send_whatsapp_notification(
+                        provider_phone,
+                        f"🩺 New consultation assigned!\n\nPatient: {patient_name}\nSymptoms: {symptoms}\n\nLogin to start video call!"
+                    )
+            
+            elif consultation_type == 'pharmacist':
+                provider_id, provider_phone = assign_to_available_pharmacist()
+                if provider_id:
+                    supabase.table('Consultations').update({
+                        'pharmacist_id': provider_id,
+                        'status': 'assigned',
+                        'assigned_at': datetime.now().isoformat()
+                    }).eq('id', consultation_id).execute()
+                    print(f"✅ Assigned to pharmacist: {provider_id}")
+                    
+                    send_whatsapp_notification(
+                        provider_phone,
+                        f"💊 New consultation assigned!\n\nPatient: {patient_name}\nSymptoms: {symptoms}\n\nLogin to start video call!"
+                    )
         
         return jsonify({
             'success': True,
@@ -252,13 +279,13 @@ def create_video_room():
         
         # Determine identity based on role
         if role == 'patient':
-            identity = f"patient_{consultation_id[:8]}"
+            identity = f"patient_{str(consultation_id)[:8]}"
         elif role == 'doctor':
-            identity = f"doctor_{consultation['doctor_id'][:8] if consultation.get('doctor_id') else 'unknown'}"
+            identity = f"doctor_{str(consultation.get('doctor_id', 'unknown'))[:8]}"
         elif role == 'pharmacist':
-            identity = f"pharmacist_{consultation['pharmacist_id'][:8] if consultation.get('pharmacist_id') else 'unknown'}"
+            identity = f"pharmacist_{str(consultation.get('pharmacist_id', 'unknown'))[:8]}"
         else:
-            identity = f"user_{consultation_id[:8]}"
+            identity = f"user_{str(consultation_id)[:8]}"
         
         # Create access token
         token = AccessToken(
@@ -295,7 +322,7 @@ def create_video_room():
 def paystack_webhook():
     """
     Receive payment confirmation from Paystack
-    Assign consultation to doctor
+    Assign consultation to doctor or pharmacist
     """
     try:
         data = request.json
@@ -329,7 +356,7 @@ def paystack_webhook():
                 .single()\
                 .execute().data
             
-            # Assign to doctor
+            # Assign to provider
             if consultation_type == 'doctor':
                 provider_id, provider_phone = assign_to_available_doctor()
                 if provider_id:
@@ -350,6 +377,28 @@ def paystack_webhook():
                     send_whatsapp_notification(
                         consultation['patient_phone'],
                         f"✅ Payment confirmed! ₦{amount:,.0f}\n\nYour doctor will call you soon via video.\n\nThank you for using OgaDoctor! 🩺"
+                    )
+            
+            elif consultation_type == 'pharmacist':
+                provider_id, provider_phone = assign_to_available_pharmacist()
+                if provider_id:
+                    supabase.table('Consultations').update({
+                        'pharmacist_id': provider_id,
+                        'status': 'assigned',
+                        'assigned_at': datetime.now().isoformat()
+                    }).eq('id', consultation_id).execute()
+                    print(f"✅ Assigned to pharmacist: {provider_id}")
+                    
+                    # Notify pharmacist
+                    send_whatsapp_notification(
+                        provider_phone,
+                        f"💊 New paid consultation!\n\nPatient: {consultation['patient_name']}\nSymptoms: {consultation['symptoms']}\n\nLogin to start video call!"
+                    )
+                    
+                    # Confirm to patient
+                    send_whatsapp_notification(
+                        consultation['patient_phone'],
+                        f"✅ Payment confirmed! ₦{amount:,.0f}\n\nYour pharmacist will call you soon via video.\n\nThank you for using OgaDoctor! 💊"
                     )
             
             return jsonify({'success': True}), 200
@@ -378,7 +427,7 @@ def test_consultation():
             'status': 'pending',
             'payment_status': 'unpaid',
             'consultation_fee': 1500,
-            'doctor_payout': 1000,
+            'provider_payout': 1000,
             'platform_commission': 500,
             'created_at': datetime.now().isoformat()
         }).execute()
