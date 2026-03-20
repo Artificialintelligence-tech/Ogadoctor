@@ -1255,7 +1255,7 @@ elif page == "👥 Patients":
             df_display['Total Spent'] = df_display['Total Spent'].apply(lambda x: f"₦{x:,.0f}")
         
         if 'Registered' in df_display.columns:
-            df_display['Registered'] = pd.to_datetime(df_display['Registered']).dt.strftime('%Y-%m-%d')
+            df_display['Registered'] = pd.to_datetime(df_display['Registered'], errors='coerce').dt.strftime('%Y-%m-%d')
         
         st.dataframe(df_display, use_container_width=True, hide_index=True)
         
