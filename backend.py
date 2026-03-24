@@ -15,6 +15,7 @@ from twilio.jwt.access_token.grants import VideoGrant
 from datetime import datetime
 import os
 import requests
+from openai import OpenAI
 
 app = Flask(__name__)
 
@@ -32,9 +33,13 @@ TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_API_KEY = os.getenv("TWILIO_API_KEY", "")
 TWILIO_API_SECRET = os.getenv("TWILIO_API_SECRET", "")
 
+# OpenAI credentials
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+
 # Initialize clients
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN) if TWILIO_ACCOUNT_SID else None
+openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 # ============================================================================
 # HELPER FUNCTIONS
@@ -85,6 +90,75 @@ def determine_priority(severity):
     else:
         return 'LOW'
 
+def run_ai_diagnosis(symptoms, severity, duration):
+    """Run AI diagnosis using OpenAI GPT-4"""
+    try:
+        if not openai_client:
+            return "AI unavailable", "Please consult doctor"
+        
+        prompt = """You are a clinical decision support system for a Nigerian community pharmacy.
+Your role:
+1. Provide a likely diagnosis based on symptoms
+2. Recommend appropriate OTC medications available in Nigeria
+3. Include dosage instructions
+4. Flag if patient should see a doctor instead
+
+Format your response EXACTLY like this:
+DIAGNOSIS: [Your assessment]
+MEDICATIONS:
+1. [Drug name] - [Dosage] - [Duration]
+2. [Drug name] - [Dosage] - [Duration]
+ADVICE: [Any additional care instructions]
+RED FLAGS: [If patient should see doctor instead of self-treating]
+
+Be practical and only suggest medications commonly available in Nigerian pharmacies."""
+
+        response = openai_client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {
+                    "role": "system",
+                    "content": prompt
+                },
+                {
+                    "role": "user",
+                    "content": f"Patient Information:\nSymptoms: {symptoms}\nSeverity: {severity}\nDuration: {duration}\n\nPlease provide diagnosis and treatment recommendations."
+                }
+            ],
+            max_tokens=300,
+            temperature=0.7
+        )
+        
+        ai_response = response.choices[0].message.content
+        
+        # Parse AI response
+        diagnosis = ""
+        medications = ""
+        
+        if "DIAGNOSIS:" in ai_response:
+            diagnosis_match = ai_response.split("DIAGNOSIS:")[1].split("MEDICATIONS:")[0].strip()
+            diagnosis = diagnosis_match
+        
+        if "MEDICATIONS:" in ai_response:
+            meds_match = ai_response.split("MEDICATIONS:")[1]
+            if "ADVICE:" in meds_match:
+                meds_match = meds_match.split("ADVICE:")[0]
+            elif "RED FLAGS:" in meds_match:
+                meds_match = meds_match.split("RED FLAGS:")[0]
+            medications = meds_match.strip()
+        
+        if not diagnosis:
+            diagnosis = ai_response
+        if not medications:
+            medications = ai_response
+        
+        print(f"✅ AI Diagnosis completed")
+        return diagnosis, medications
+        
+    except Exception as e:
+        print(f"❌ AI Diagnosis error: {e}")
+        return "AI analysis unavailable", "Doctor will assess manually"
+
 def send_whatsapp_notification(phone_number, message):
     """Send WhatsApp notification (placeholder for now)"""
     print(f"📱 WhatsApp to {phone_number}: {message}")
@@ -100,11 +174,12 @@ def home():
     return jsonify({
         'status': 'healthy',
         'service': 'OgaDoctor Backend - Video System',
-        'version': '2.0',
+        'version': '2.1',
         'features': [
             'Encrypted video consultations',
             'Botpress integration',
             'Paystack payments',
+            'AI-powered diagnosis (post-payment)',
             'Doctor and Pharmacist assignment'
         ]
     })
@@ -113,6 +188,7 @@ def home():
 def botpress_webhook():
     """
     Receive patient consultation data from Botpress
+    NOTE: AI diagnosis NOT included here - it runs AFTER payment
     
     Expected JSON:
     {
@@ -121,10 +197,7 @@ def botpress_webhook():
         "symptoms": "Headache and fever",
         "severity": "Strong",
         "duration": "2 days",
-        "consultation_type": "doctor",
-        "ai_diagnosis": "...",
-        "ai_drug_recommendations": "...",
-        "payment_reference": "PAY_xxx" (optional)
+        "consultation_type": "doctor"
     }
     """
     try:
@@ -138,9 +211,6 @@ def botpress_webhook():
         severity = data.get('severity', 'moderate')
         duration = data.get('duration', 'Not specified')
         consultation_type = data.get('consultation_type', 'doctor')
-        ai_diagnosis = data.get('ai_diagnosis', '')
-        ai_drug_recommendations = data.get('ai_drug_recommendations', '')
-        payment_reference = data.get('payment_reference', '')
         
         # Validate
         if not patient_phone or not symptoms:
@@ -181,7 +251,7 @@ def botpress_webhook():
             user_id = new_user.data[0]['id']
             print(f"✅ Created new user: {user_id}")
         
-        # Create consultation
+        # Create consultation WITHOUT AI diagnosis (will be added after payment)
         consultation_data = {
             'patient_name': patient_name,
             'patient_phone': patient_phone,
@@ -190,12 +260,11 @@ def botpress_webhook():
             'severity': severity,
             'duration': duration,
             'priority': priority,
-            'status': 'pending' if not payment_reference else 'paid',
-            'payment_status': 'paid' if payment_reference else 'unpaid',
-            'payment_reference': payment_reference,
+            'status': 'pending',
+            'payment_status': 'unpaid',
             'consultation_fee': consultation_fee,
-            'ai_diagnosis': ai_diagnosis,
-            'ai_drug_recommendations': ai_drug_recommendations,
+            'ai_diagnosis': '',  # Will be filled after payment
+            'ai_drug_recommendations': '',  # Will be filled after payment
             'platform_commission': platform_commission,
             'provider_payout': provider_payout,
             'created_at': datetime.now().isoformat()
@@ -206,43 +275,11 @@ def botpress_webhook():
         consultation_id = result.data[0]['id']
         print(f"✅ Created consultation: {consultation_id}")
         
-        # If already paid, assign to provider
-        if payment_reference:
-            if consultation_type == 'doctor':
-                provider_id, provider_phone = assign_to_available_doctor()
-                if provider_id:
-                    supabase.table('Consultations').update({
-                        'doctor_id': provider_id,
-                        'status': 'assigned',
-                        'assigned_at': datetime.now().isoformat()
-                    }).eq('id', consultation_id).execute()
-                    print(f"✅ Assigned to doctor: {provider_id}")
-                    
-                    send_whatsapp_notification(
-                        provider_phone,
-                        f"🩺 New consultation assigned!\n\nPatient: {patient_name}\nSymptoms: {symptoms}\n\nLogin to start video call!"
-                    )
-            
-            elif consultation_type == 'pharmacist':
-                provider_id, provider_phone = assign_to_available_pharmacist()
-                if provider_id:
-                    supabase.table('Consultations').update({
-                        'pharmacist_id': provider_id,
-                        'status': 'assigned',
-                        'assigned_at': datetime.now().isoformat()
-                    }).eq('id', consultation_id).execute()
-                    print(f"✅ Assigned to pharmacist: {provider_id}")
-                    
-                    send_whatsapp_notification(
-                        provider_phone,
-                        f"💊 New consultation assigned!\n\nPatient: {patient_name}\nSymptoms: {symptoms}\n\nLogin to start video call!"
-                    )
-        
         return jsonify({
             'success': True,
             'consultation_id': consultation_id,
             'priority': priority,
-            'message': 'Consultation created successfully'
+            'message': 'Consultation created. AI diagnosis will run after payment.'
         }), 201
     
     except Exception as e:
@@ -296,7 +333,10 @@ def create_payment_link():
                 'consultation_id': consultation_id,
                 'consultation_type': consultation_type,
                 'patient_name': consultation['patient_name'],
-                'patient_phone': consultation['patient_phone']
+                'patient_phone': consultation['patient_phone'],
+                'symptoms': consultation['symptoms'],
+                'severity': consultation['severity'],
+                'duration': consultation['duration']
             },
             'callback_url': 'https://ogadoctor-analytics-dashboard.onrender.com/payment/callback'
         }
@@ -386,8 +426,13 @@ def payment_callback():
             <div class="container">
                 <div class="success-icon">✅</div>
                 <h1>Payment Successful!</h1>
-                <p>Your consultation has been paid for and a doctor will be assigned shortly.</p>
-                <p>You will receive a WhatsApp message with your video call link.</p>
+                <p>Your consultation has been paid for. Our AI is analyzing your symptoms now.</p>
+                <p>You will receive a WhatsApp message shortly with:</p>
+                <ul style="text-align: left; display: inline-block;">
+                    <li>AI diagnosis</li>
+                    <li>Medication recommendations</li>
+                    <li>Your assigned doctor/pharmacist details</li>
+                </ul>
                 <div class="reference">
                     <small>Reference: {reference}</small>
                 </div>
@@ -398,6 +443,113 @@ def payment_callback():
         """
     else:
         return "Payment verification pending...", 200
+
+@app.route('/webhook/paystack', methods=['POST'])
+def paystack_webhook():
+    """
+    Receive payment confirmation from Paystack
+    Run AI diagnosis, then assign consultation to doctor or pharmacist
+    """
+    try:
+        data = request.json
+        print(f"💰 Received from Paystack: {data.get('event')}")
+        
+        if data.get('event') == 'charge.success':
+            payment_data = data.get('data', {})
+            
+            reference = payment_data.get('reference')
+            amount = payment_data.get('amount') / 100  # kobo to naira
+            metadata = payment_data.get('metadata', {})
+            
+            consultation_id = metadata.get('consultation_id')
+            consultation_type = metadata.get('consultation_type', 'doctor')
+            symptoms = metadata.get('symptoms', '')
+            severity = metadata.get('severity', '')
+            duration = metadata.get('duration', '')
+            
+            if not consultation_id:
+                return jsonify({'success': False, 'error': 'No consultation_id'}), 400
+            
+            # Update payment status
+            supabase.table('Consultations').update({
+                'payment_status': 'paid',
+                'payment_reference': reference,
+                'status': 'paid'
+            }).eq('id', consultation_id).execute()
+            print(f"✅ Updated payment status for: {consultation_id}")
+            
+            # RUN AI DIAGNOSIS NOW (after payment confirmed)
+            print(f"🤖 Running AI diagnosis...")
+            ai_diagnosis, ai_medications = run_ai_diagnosis(symptoms, severity, duration)
+            
+            # Update consultation with AI results
+            supabase.table('Consultations').update({
+                'ai_diagnosis': ai_diagnosis,
+                'ai_drug_recommendations': ai_medications
+            }).eq('id', consultation_id).execute()
+            print(f"✅ AI diagnosis saved to consultation: {consultation_id}")
+            
+            # Get consultation with AI results
+            consultation = supabase.table('Consultations')\
+                .select('*')\
+                .eq('id', consultation_id)\
+                .single()\
+                .execute().data
+            
+            # Assign to provider
+            if consultation_type == 'doctor':
+                provider_id, provider_phone = assign_to_available_doctor()
+                if provider_id:
+                    supabase.table('Consultations').update({
+                        'doctor_id': provider_id,
+                        'status': 'assigned',
+                        'assigned_at': datetime.now().isoformat()
+                    }).eq('id', consultation_id).execute()
+                    print(f"✅ Assigned to doctor: {provider_id}")
+                    
+                    # Notify doctor
+                    send_whatsapp_notification(
+                        provider_phone,
+                        f"🩺 New paid consultation!\n\nPatient: {consultation['patient_name']}\nSymptoms: {consultation['symptoms']}\nAI Diagnosis: {ai_diagnosis}\n\nLogin to start video call!"
+                    )
+                    
+                    # Confirm to patient
+                    send_whatsapp_notification(
+                        consultation['patient_phone'],
+                        f"✅ Payment confirmed! ₦{amount:,.0f}\n\n🤖 AI Diagnosis: {ai_diagnosis}\n\n💊 Recommended: {ai_medications}\n\nYour doctor will call you soon via video.\n\nThank you for using OgaDoctor! 🩺"
+                    )
+            
+            elif consultation_type == 'pharmacist':
+                provider_id, provider_phone = assign_to_available_pharmacist()
+                if provider_id:
+                    supabase.table('Consultations').update({
+                        'pharmacist_id': provider_id,
+                        'status': 'assigned',
+                        'assigned_at': datetime.now().isoformat()
+                    }).eq('id', consultation_id).execute()
+                    print(f"✅ Assigned to pharmacist: {provider_id}")
+                    
+                    # Notify pharmacist
+                    send_whatsapp_notification(
+                        provider_phone,
+                        f"💊 New paid consultation!\n\nPatient: {consultation['patient_name']}\nSymptoms: {consultation['symptoms']}\nAI Diagnosis: {ai_diagnosis}\n\nLogin to start video call!"
+                    )
+                    
+                    # Confirm to patient
+                    send_whatsapp_notification(
+                        consultation['patient_phone'],
+                        f"✅ Payment confirmed! ₦{amount:,.0f}\n\n🤖 AI Diagnosis: {ai_diagnosis}\n\n💊 Recommended: {ai_medications}\n\nYour pharmacist will call you soon via video.\n\nThank you for using OgaDoctor! 💊"
+                    )
+            
+            return jsonify({'success': True}), 200
+        
+        return jsonify({'success': True}), 200
+    
+    except Exception as e:
+        print(f"❌ Error in paystack webhook: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/video/create-room', methods=['POST'])
 def create_video_room():
@@ -464,99 +616,6 @@ def create_video_room():
             'error': str(e)
         }), 500
 
-@app.route('/webhook/paystack', methods=['POST'])
-def paystack_webhook():
-    """
-    Receive payment confirmation from Paystack
-    Assign consultation to doctor or pharmacist
-    """
-    try:
-        data = request.json
-        print(f"💰 Received from Paystack: {data.get('event')}")
-        
-        if data.get('event') == 'charge.success':
-            payment_data = data.get('data', {})
-            
-            reference = payment_data.get('reference')
-            amount = payment_data.get('amount') / 100  # kobo to naira
-            metadata = payment_data.get('metadata', {})
-            
-            consultation_id = metadata.get('consultation_id')
-            consultation_type = metadata.get('consultation_type', 'doctor')
-            
-            if not consultation_id:
-                return jsonify({'success': False, 'error': 'No consultation_id'}), 400
-            
-            # Update payment status
-            supabase.table('Consultations').update({
-                'payment_status': 'paid',
-                'payment_reference': reference,
-                'status': 'paid'
-            }).eq('id', consultation_id).execute()
-            print(f"✅ Updated payment status for: {consultation_id}")
-            
-            # Get consultation
-            consultation = supabase.table('Consultations')\
-                .select('*')\
-                .eq('id', consultation_id)\
-                .single()\
-                .execute().data
-            
-            # Assign to provider
-            if consultation_type == 'doctor':
-                provider_id, provider_phone = assign_to_available_doctor()
-                if provider_id:
-                    supabase.table('Consultations').update({
-                        'doctor_id': provider_id,
-                        'status': 'assigned',
-                        'assigned_at': datetime.now().isoformat()
-                    }).eq('id', consultation_id).execute()
-                    print(f"✅ Assigned to doctor: {provider_id}")
-                    
-                    # Notify doctor
-                    send_whatsapp_notification(
-                        provider_phone,
-                        f"🩺 New paid consultation!\n\nPatient: {consultation['patient_name']}\nSymptoms: {consultation['symptoms']}\n\nLogin to start video call!"
-                    )
-                    
-                    # Confirm to patient
-                    send_whatsapp_notification(
-                        consultation['patient_phone'],
-                        f"✅ Payment confirmed! ₦{amount:,.0f}\n\nYour doctor will call you soon via video.\n\nThank you for using OgaDoctor! 🩺"
-                    )
-            
-            elif consultation_type == 'pharmacist':
-                provider_id, provider_phone = assign_to_available_pharmacist()
-                if provider_id:
-                    supabase.table('Consultations').update({
-                        'pharmacist_id': provider_id,
-                        'status': 'assigned',
-                        'assigned_at': datetime.now().isoformat()
-                    }).eq('id', consultation_id).execute()
-                    print(f"✅ Assigned to pharmacist: {provider_id}")
-                    
-                    # Notify pharmacist
-                    send_whatsapp_notification(
-                        provider_phone,
-                        f"💊 New paid consultation!\n\nPatient: {consultation['patient_name']}\nSymptoms: {consultation['symptoms']}\n\nLogin to start video call!"
-                    )
-                    
-                    # Confirm to patient
-                    send_whatsapp_notification(
-                        consultation['patient_phone'],
-                        f"✅ Payment confirmed! ₦{amount:,.0f}\n\nYour pharmacist will call you soon via video.\n\nThank you for using OgaDoctor! 💊"
-                    )
-            
-            return jsonify({'success': True}), 200
-        
-        return jsonify({'success': True}), 200
-    
-    except Exception as e:
-        print(f"❌ Error in paystack webhook: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)}), 500
-
 @app.route('/api/test', methods=['POST'])
 def test_consultation():
     """Test endpoint - create a test consultation"""
@@ -600,14 +659,14 @@ def test_consultation():
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
     print(f"""
-    🚀 OgaDoctor Backend Server - Video System
-    ==========================================
+    🚀 OgaDoctor Backend Server - Video System with AI
+    ==================================================
     
     📍 Port: {port}
     🔗 Endpoints:
        - GET  /                       (health check)
-       - POST /webhook/botpress       (receive consultations)
-       - POST /webhook/paystack       (payment confirmation)
+       - POST /webhook/botpress       (receive consultations - no AI yet)
+       - POST /webhook/paystack       (payment + AI diagnosis + assignment)
        - POST /payment/create-link    (generate payment link)
        - GET  /payment/callback       (payment success page)
        - POST /video/create-room      (create video call)
@@ -616,5 +675,6 @@ if __name__ == '__main__':
     🎥 Twilio Video: {'✅ Connected' if TWILIO_ACCOUNT_SID else '❌ Not configured'}
     💾 Supabase: {'✅ Connected' if SUPABASE_URL else '❌ Not configured'}
     💰 Paystack: {'✅ Connected' if os.getenv("PAYSTACK_SECRET_KEY") else '❌ Not configured'}
+    🤖 OpenAI: {'✅ Connected' if OPENAI_API_KEY else '❌ Not configured'}
     """)
     app.run(host='0.0.0.0', port=port, debug=True)
