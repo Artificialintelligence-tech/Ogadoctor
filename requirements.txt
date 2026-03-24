@@ -5,3 +5,5 @@ gunicorn==21.2.0
 supabase
 gotrue
 httpx
+requests
+openai
