@@ -16,9 +16,10 @@ from datetime import datetime
 import os
 import requests
 from openai import OpenAI
+from flask_cors import CORS
 
 app = Flask(__name__)
-
+CORS(app)
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
